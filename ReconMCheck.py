@@ -84,10 +84,12 @@ def parse_xml(xml_file):
     # Define the column structure
     columns = [
         'TxId', 'ExctgPty', 'InvstmtPtyInd', 'SubmitgPty', 'LEI', 'CtryOfBrnch', 'LEI2', 'LEI3',
-        'TrnsmssnInd', 'TradDt', 'TradgCpcty', 'QtyUnit', 'Amt', 'Ccy', 'TradVn', 'FinInstrmId',
-        'InvstmtDcsnPrsnCtryOfBrnch', 'InvstmtDcsnPrsnId', 'InvstmtDcsnPrsnCd', 'ExctgPrsnCtryOfBrnch',
-        'ExctgPrsnId', 'ExctgPrsnCd', 'SctiesFincgTxInd', 'Sts', 'SubmDt'
+        'TrnsmssnInd', 'TradDt', 'TradgCpcty', 'QtyUnit', 'Amt', 'Ccy', 'NmnlVal', 'NmnlValCcy',
+        'Pctg', 'NetAmt', 'TradVn', 'FinInstrmId', 'InvstmtDcsnPrsnCtryOfBrnch', 'InvstmtDcsnPrsnId',
+        'InvstmtDcsnPrsnCd', 'InvstmtDcsnPrsnPrtry',  # <- also add InvstmtDcsnPrsnPrtry
+        'ExctgPrsnCtryOfBrnch', 'ExctgPrsnId', 'ExctgPrsnCd', 'SctiesFincgTxInd', 'Sts', 'SubmDt'
     ]
+
 
     # Helper function to extract text with default value
     def get_text(element, path):
@@ -99,6 +101,11 @@ def parse_xml(xml_file):
     # Iterate through each transaction (Tx) in the XML
     for tx in root.findall(".//ns:Tx", namespaces=ns):
         amt_element = tx.find(".//ns:Tx/ns:Pric/ns:Pric/ns:MntryVal/ns:Amt", namespaces=ns)
+        nmnl_val_element = tx.find(".//ns:Tx/ns:Qty/ns:NmnlVal", namespaces=ns)
+        pctg_element = tx.find(".//ns:Tx/ns:Pric/ns:Pric/ns:Pctg", namespaces=ns)
+        net_amt_element = tx.find(".//ns:Tx/ns:NetAmt", namespaces=ns)
+        prtry_element = tx.find(".//ns:InvstmtDcsnPrsn/ns:Prsn/ns:Othr/ns:SchmeNm/ns:Prtry", namespaces=ns)
+
         record = {
             'TxId': get_text(tx, ".//ns:TxId"),
             'ExctgPty': get_text(tx, ".//ns:ExctgPty"),
@@ -114,11 +121,16 @@ def parse_xml(xml_file):
             'QtyUnit': get_text(tx, ".//ns:Tx/ns:Qty/ns:Unit"),
             'Amt': get_text(tx, ".//ns:Tx/ns:Pric/ns:Pric/ns:MntryVal/ns:Amt"),
             'Ccy': amt_element.attrib.get("Ccy", "") if amt_element is not None else "",
+            'NmnlVal': nmnl_val_element.text if nmnl_val_element is not None else "",
+            'NmnlValCcy': nmnl_val_element.attrib.get("Ccy", "") if nmnl_val_element is not None else "",
+            'Pctg': pctg_element.text if pctg_element is not None else "",
+            'NetAmt': net_amt_element.text if net_amt_element is not None else "",
             'TradVn': get_text(tx, ".//ns:Tx/ns:TradVn"),
             'FinInstrmId': get_text(tx, ".//ns:FinInstrm/ns:Id"),
             'InvstmtDcsnPrsnCtryOfBrnch': get_text(tx, ".//ns:InvstmtDcsnPrsn/ns:Prsn/ns:CtryOfBrnch"),
             'InvstmtDcsnPrsnId': get_text(tx, ".//ns:InvstmtDcsnPrsn/ns:Prsn/ns:Othr/ns:Id"),
             'InvstmtDcsnPrsnCd': get_text(tx, ".//ns:InvstmtDcsnPrsn/ns:Prsn/ns:Othr/ns:SchmeNm/ns:Cd"),
+            'InvstmtDcsnPrsnPrtry': prtry_element.text if prtry_element is not None else "",
             'ExctgPrsnCtryOfBrnch': get_text(tx, ".//ns:ExctgPrsn/ns:Prsn/ns:CtryOfBrnch"),
             'ExctgPrsnId': get_text(tx, ".//ns:ExctgPrsn/ns:Prsn/ns:Othr/ns:Id"),
             'ExctgPrsnCd': get_text(tx, ".//ns:ExctgPrsn/ns:Prsn/ns:Othr/ns:SchmeNm/ns:Cd"),
@@ -127,6 +139,7 @@ def parse_xml(xml_file):
             'SubmDt': get_text(tx, ".//ns:SubmDt")
         }
         records.append(record)
+
 
     # Convert records to DataFrame and remove empty rows
     df = pd.DataFrame(records, columns=columns)

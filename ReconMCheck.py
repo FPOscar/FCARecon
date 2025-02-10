@@ -155,7 +155,7 @@ def write_large_df_in_chunks(df, writer, sheet_name, chunk_size=10000):
 
 def perform_column_checks(nex_data, fca_data):
     """Perform vectorized checks to see if specific columns in NEX data match those in FCA data, 
-    with special handling for 'Trading Date Time' and 'Quantity' columns."""
+    with special handling for 'Trading Date Time' and treasury bills (Quantity/Price check)."""
     
     # Ensure the necessary columns are present
     required_columns_nex = [
@@ -165,10 +165,10 @@ def perform_column_checks(nex_data, fca_data):
     ]
     
     required_columns_fca = [
-        'TxId', 'ExctgPty', 'TradDt', 'QtyUnit', 'Amt', 'FinInstrmId', 'TradVn', 'TrnsmssnInd', 'LEI', 'LEI3'
+        'TxId', 'ExctgPty', 'TradDt', 'QtyUnit', 'Amt', 'FinInstrmId', 'TradVn', 'TrnsmssnInd', 'LEI', 'LEI3',
+        # Note: FCA data also has 'NmnlVal' and 'NetAmt' for treasury bills.
     ]
-
-    # Check if the columns exist in both datasets
+    
     for col in required_columns_nex:
         if col not in nex_data.columns:
             raise KeyError(f"'{col}' column not found in NEX data.")
@@ -178,18 +178,18 @@ def perform_column_checks(nex_data, fca_data):
             raise KeyError(f"'{col}' column not found in FCA data.")
     
     # Merge the NEX and FCA data on 'Transaction Reference Number' (NEX) and 'TxId' (FCA)
-    merged_data = pd.merge(nex_data, fca_data, left_on='Transaction Reference Number', right_on='TxId', how='left', suffixes=('_nex', '_fca'))
-
+    merged_data = pd.merge(nex_data, fca_data, left_on='Transaction Reference Number', right_on='TxId', how='left')
+    
     # Create a DataFrame to hold the results
     results = pd.DataFrame()
-
+    
     # Define the columns to compare
     columns_to_check = [
         ('Transaction Reference Number', 'TxId'),
         ('Executing Entity Identification Code', 'ExctgPty'),
         ('Trading Date Time', 'TradDt'),  # Special handling for this column
-        ('Quantity', 'QtyUnit'),          # Special handling for this column
-        ('Price', 'Amt'),
+        ('Quantity', 'QtyUnit'),          # Will add treasury bill logic here
+        ('Price', 'Amt'),                 # Will add treasury bill logic here
         ('Instrument Identification Code', 'FinInstrmId'),
         ('Trading Venue', 'TradVn'),
         ('Transmission of Order Indicator', 'TrnsmssnInd'),
@@ -197,31 +197,55 @@ def perform_column_checks(nex_data, fca_data):
         ('Seller Code', 'LEI3')
     ]
     
-    # Perform vectorized comparisons for most columns
     for nex_col, fca_col in columns_to_check:
         if nex_col == 'Trading Date Time':
-            # Special handling for the 'Trading Date Time' column to ignore the trailing 'Z'
+            # Ignore any trailing 'Z' in FCA’s date
             results[f'{nex_col} Check'] = merged_data[nex_col] == merged_data[fca_col].str.rstrip('Z')
+        
         elif nex_col == 'Quantity':
-            # Special handling for 'Quantity': convert both sides to float, handle invalid data, and compare
-            results[f'{nex_col} Check'] = pd.to_numeric(merged_data[nex_col], errors='coerce').round(0) == pd.to_numeric(merged_data[fca_col], errors='coerce').round(0)
+            # For treasury bills, FCA's QtyUnit will be empty.
+            # In that case, compare NEX's Quantity to FCA's NmnlVal instead.
+            fca_qty = merged_data[fca_col]
+            # Define a boolean series where QtyUnit is missing or empty (treasury bill indicator)
+            is_tbill = fca_qty.isna() | (fca_qty.astype(str).str.strip() == '')
+            # Use QtyUnit if available; otherwise use NmnlVal
+            fca_qty_final = fca_qty.where(~is_tbill, merged_data['NmnlVal'])
+            
+            # Convert both sides to numeric and round to 0 decimals before comparing.
+            results[f'{nex_col} Check'] = (
+                pd.to_numeric(merged_data[nex_col], errors='coerce').round(0) ==
+                pd.to_numeric(fca_qty_final, errors='coerce').round(0)
+            )
+        
         elif nex_col == 'Price':
-            # Special handling for 'Price': convert both sides to float, handle invalid data, and compare
-            results[f'{nex_col} Check'] = pd.to_numeric(merged_data[nex_col], errors='coerce').round(2) == pd.to_numeric(merged_data[fca_col], errors='coerce').round(2)
+            # For treasury bills, if FCA's Amt is empty, use Pctg instead.
+            fca_amt = merged_data[fca_col]
+            is_tbill = fca_amt.isna() | (fca_amt.astype(str).str.strip() == '')
+            fca_amt_final = fca_amt.where(~is_tbill, merged_data['Pctg'])
+            
+            # Convert both sides to numeric and round to 2 decimals before comparing.
+            results[f'{nex_col} Check'] = (
+                pd.to_numeric(merged_data[nex_col], errors='coerce').round(2) ==
+                pd.to_numeric(fca_amt_final, errors='coerce').round(2)
+            )
+        
         elif nex_col == 'Transmission of Order Indicator':
-            # Special handling for 'Transmission of Order Indicator': convert both sides to boolean
+            # Convert both sides to boolean for the comparison
             results[f'{nex_col} Check'] = merged_data[nex_col].astype(bool) == merged_data[fca_col].astype(bool)
+        
         else:
             # Standard comparison for other columns
             results[f'{nex_col} Check'] = merged_data[nex_col] == merged_data[fca_col]
     
-    # Replace the applymap with a more modern approach
+    # Replace the boolean values with "OK" or "CHECK"
     for column in results.columns:
         results[column] = results[column].map(lambda x: "OK" if x else "CHECK")
     
-    # Include Transaction Reference Number for cross-referencing
+    # Include additional columns for cross-referencing
     results['Actual Transaction Reference Number'] = merged_data['Transaction Reference Number']
-    results['Instrument Full Name'] = merged_data['Instrument Full Name']
+    # If you have an Instrument Full Name field, include it; otherwise, you can remove the next line.
+    if 'Instrument Full Name' in merged_data.columns:
+        results['Instrument Full Name'] = merged_data['Instrument Full Name']
     
     return results
 
